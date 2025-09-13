@@ -33,12 +33,17 @@ def preprocess(tickets: pd.DataFrame, agents: pd.DataFrame):
     """
 
     tickets["creation_timestamp"] = pd.to_datetime(tickets["creation_timestamp"])
+    # Convert Unix timestamp (seconds) to datetime objects
+    tickets["creation_timestamp"] = pd.to_datetime(tickets["creation_timestamp"], unit="s", utc=True)
     now = datetime.now(tz=tickets["creation_timestamp"].dt.tz) if tickets["creation_timestamp"].dt.tz.any() else datetime.now()
     tickets["ticket_age_hours"] = (now - tickets["creation_timestamp"]).dt.total_seconds() / 3600
 
     # Priority to numeric rank for easy sorting
     priority_rank = {"high": 3, "medium": 2, "low": 1}
     tickets["priority_score"] = tickets["priority"].str.lower().map(priority_rank).fillna(1)
+    # Placeholder for priority score - can be enhanced later
+    # For now, we will sort by age only.
+    tickets["priority_score"] = 1
 
     # Agent load bookkeeping
     if "current_load" not in agents.columns:
