@@ -1,83 +1,65 @@
 """
-scoring.py  –  PyCon25 Hackathon
-Simple heuristic score for ticket-agent matching
+scoring.py – PyCon25 Hackathon
+Skill-dictionary-based match score (numeric, 0-1 scale)
 """
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+import re
 
-# ---------------------------------------------------------------
-# 1. Pre-compute vector space for agent skills
-# ---------------------------------------------------------------
-_vectorizer = TfidfVectorizer(stop_words="english")
+# ------------------------------
+# Extract likely skills from ticket text using pattern matching
+# ------------------------------
+SKILL_KEYWORDS = [
+    "Networking", "Linux_Administration", "Cloud_AWS", "VPN_Troubleshooting", "Hardware_Diagnostics",
+    "Windows_Server_2022", "Active_Directory", "Virtualization_VMware", "Software_Licensing",
+    "Outlook", "Email", "Authentication", "VMware", "Credential_Manager"
+]
+def extract_matched_skills(text):
+    text = text.lower()
+    matched = []
+    for skill in SKILL_KEYWORDS:
+        # Match ignoring underscores and case
+        pattern = skill.lower().replace("_", " ").replace("365", "")
+        if re.search(re.escape(pattern), text):
+            matched.append(skill)
+    return matched
 
-_agent_skill_matrix = None
-_agent_ids = None
-
-
-def _build_agent_vectors(agents_df):
-    """Lazy-build TF-IDF matrix of agent skill strings."""
-    global _agent_skill_matrix, _agent_ids
-    texts = agents_df["skills"].fillna("").astype(str).str.lower().tolist()
-    _agent_skill_matrix = _vectorizer.fit_transform(texts)
-    _agent_ids = agents_df["id"].tolist()
-
-
-# ---------------------------------------------------------------
-# 2. Public API
-# ---------------------------------------------------------------
+# ------------------------------
+# Main scoring function
+# ------------------------------
 def calculate_match_score(ticket_row, agent_row):
     """
-    Return a numeric score: higher = better match.
-
-    weight_skill  = 0.6
-    weight_prio   = 0.3
-    weight_load   = 0.1  (penalty)
+    Returns score for agent-ticket match.
+    Factors:
+        skill fit (weighted proficiency, normalized)
+        agent experience_level (bonus for higher)
+        agent load (penalty)
+        availability_status (hard block if not 'Available')
     """
-    # ---------- skill similarity (0-1) ----------
-    skill_sim = _skill_similarity(ticket_row, agent_row)
+    if str(agent_row["availability_status"]).lower() != "available":
+        return -1e6  # Block unavailable agents
 
-    # ---------- priority bonus (0, 0.5, 1) ----------
-    prio_levels = {"low": 0, "medium": 0.5, "high": 1}
-    prio_bonus = prio_levels.get(str(ticket_row["priority"]).lower(), 0)
+    # --- Step 1: Ticket required skills ---
+    ticket_skills = extract_matched_skills(ticket_row["description"] + " " + ticket_row["title"])
+    agent_skills = agent_row["skills"]
 
-    # ---------- load penalty (0-1) ----------
-    load_ratio = agent_row["current_load"] / agent_row["max_daily"]
-    load_penalty = load_ratio  # linear: full if at capacity
+    # --- Step 2: Calculate skill fit ---
+    skill_score = 0
+    max_skill_possible = 10 * max(1, len(ticket_skills))  # scale normalizes by # skills
+    for skill in ticket_skills:
+        skill_score += agent_skills.get(skill, 0)  # agent's skill proficiency for this skill
 
-    # ----- weighted sum -----
-    score = (0.6 * skill_sim) + (0.3 * prio_bonus) - (0.1 * load_penalty)
-    return score
+    skill_fit = skill_score / max_skill_possible if max_skill_possible > 0 else 0
 
+    # --- Step 3: Experience bonus ---
+    exp_bonus = min(agent_row.get("experience_level", 0) / 15, 1) * 0.25  # max bonus 0.25
 
-# ---------------------------------------------------------------
-# 3. Helper: cosine similarity between ticket text & agent skills
-# ---------------------------------------------------------------
-def _skill_similarity(ticket_row, agent_row):
-    """
-    • vectorize ticket description on the same TF-IDF space
-    • cosine similarity ∈ [0,1]
-    """
-    global _agent_skill_matrix
-    if _agent_skill_matrix is None:
-        raise RuntimeError(
-            "Agent vectors not built.  Call build_scoring_assets(agents_df) once before scoring."
-        )
+    # --- Step 4: Load penalty ---
+    load_penalty = (agent_row.get("current_load", 0) / 5) * 0.2  # penalty up to 0.2
 
-    # Vectorize ticket text on existing vocab
-    ticket_vec = _vectorizer.transform([str(ticket_row["description"]).lower()])
-    agent_idx = _agent_ids.index(agent_row["id"])
-    sim = cosine_similarity(ticket_vec, _agent_skill_matrix[agent_idx])[0, 0]
-    return float(sim)
+    final_score = skill_fit * 0.6 + exp_bonus * 0.2 - load_penalty * 0.2
 
+    return round(final_score, 4)  # rounded for readability
 
-# ---------------------------------------------------------------
-# 4. One-time initializer – call from main before assignment
-# ---------------------------------------------------------------
-def build_scoring_assets(agents_df):
-    """
-    Must be invoked exactly once *before* the first call to calculate_match_score.
-    Keeps heavy TF-IDF work out of the core loop.
-    """
-    _build_agent_vectors(agents_df)
+# -------------------------------------------------------
+# No global initialization needed for this scoring variant
+# If desired, you can precompute keyword vectors as stretch goal

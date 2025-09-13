@@ -32,9 +32,9 @@ def preprocess(tickets: pd.DataFrame, agents: pd.DataFrame):
     • Ensure current_load / max_daily columns exist
     """
 
-    tickets["created_at"] = pd.to_datetime(tickets["created_at"])
-    now = datetime.now(tz=tickets["created_at"].dt.tz) if tickets["created_at"].dt.tz.any() else datetime.now()
-    tickets["ticket_age_hours"] = (now - tickets["created_at"]).dt.total_seconds() / 3600
+    tickets["creation_timestamp"] = pd.to_datetime(tickets["creation_timestamp"])
+    now = datetime.now(tz=tickets["creation_timestamp"].dt.tz) if tickets["creation_timestamp"].dt.tz.any() else datetime.now()
+    tickets["ticket_age_hours"] = (now - tickets["creation_timestamp"]).dt.total_seconds() / 3600
 
     # Priority to numeric rank for easy sorting
     priority_rank = {"high": 3, "medium": 2, "low": 1}
