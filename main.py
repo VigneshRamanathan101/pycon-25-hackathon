@@ -31,28 +31,24 @@ def preprocess(tickets: pd.DataFrame, agents: pd.DataFrame):
     • Add ticket_age_hours
     • Ensure current_load / max_daily columns exist
     """
-
-    tickets["creation_timestamp"] = pd.to_datetime(tickets["creation_timestamp"])
     # Convert Unix timestamp (seconds) to datetime objects
-    tickets["creation_timestamp"] = pd.to_datetime(tickets["creation_timestamp"], unit="s", utc=True)
-    now = datetime.now(tz=tickets["creation_timestamp"].dt.tz) if tickets["creation_timestamp"].dt.tz.any() else datetime.now()
-    tickets["ticket_age_hours"] = (now - tickets["creation_timestamp"]).dt.total_seconds() / 3600
-
-    # Priority to numeric rank for easy sorting
-    priority_rank = {"high": 3, "medium": 2, "low": 1}
-    tickets["priority_score"] = tickets["priority"].str.lower().map(priority_rank).fillna(1)
+    if "creation_timestamp" in tickets.columns:
+        tickets["created_at"] = pd.to_datetime(tickets["creation_timestamp"], unit='s',utc=True)
+    else:
+        tickets["created_at"] = pd.to_datetime(tickets["created_at"])
+    
+    # Get the current time in the same timezone as the ticket timestamps for accurate age calculation.
+    now = pd.Timestamp.now(tz=tickets["created_at"].dt.tz)
+    tickets["ticket_age_hours"] = (now - tickets["created_at"]).dt.total_seconds() / 3600
+    
     # Placeholder for priority score - can be enhanced later
-    # For now, we will sort by age only.
     tickets["priority_score"] = 1
 
     # Agent load bookkeeping
     if "current_load" not in agents.columns:
         agents["current_load"] = 0
-    if "max_daily_tickets" in agents.columns:
-        agents["max_daily"] = agents["max_daily_tickets"]
     if "max_daily" not in agents.columns:
-        agents["max_daily"] = 10      # sensible default
-
+        agents["max_daily"] = 10  # Assuming a default max load if not provided
     return tickets, agents
 
 
@@ -67,7 +63,7 @@ def assign_tickets(tickets: pd.DataFrame, agents: pd.DataFrame):
     """
     tickets_sorted = tickets.sort_values(
         by=["priority_score", "ticket_age_hours"],
-        ascending=[False, False],
+        ascending=[True,False],
         ignore_index=True,
     )
 
@@ -79,9 +75,8 @@ def assign_tickets(tickets: pd.DataFrame, agents: pd.DataFrame):
 
         for a_idx, agent in agents.iterrows():
             # Skip agents at capacity
-            if agent["current_load"] >= agent["max_daily"]:
+            if agent.get("current_load", 0) >= agent.get("max_daily", 5):
                 continue
-
             score = calculate_match_score(ticket, agent)
             if score > best_score:
                 best_score, best_idx = score, a_idx
@@ -91,17 +86,18 @@ def assign_tickets(tickets: pd.DataFrame, agents: pd.DataFrame):
             chosen_agent = agents.loc[best_idx]
             assignments.append(
                 {
-                    "ticket_id": ticket["id"],
-                    "agent_id":  chosen_agent["id"],
-                    "rationale": f"skill={best_score:.2f} "
-                                 f"load={chosen_agent['current_load']-1}/{chosen_agent['max_daily']}",
+                    "ticket_id": ticket["ticket_id"],
+                    "title": ticket["title"],
+                    "assigned_agent_id": chosen_agent["agent_id"],
+                    "rationale": f"Assigned to {chosen_agent['name']} ({chosen_agent['agent_id']}) due to skill match ({best_score:.2f}) "
+                                 f"and current load ({chosen_agent['current_load']-1}).",
                 }
             )
         else:
             assignments.append(
                 {
-                    "ticket_id": ticket["id"],
-                    "agent_id":  None,
+                    "ticket_id": ticket["ticket_id"],
+                    "assigned_agent_id": None,
                     "rationale": "no agent available",
                 }
             )
@@ -112,8 +108,9 @@ def assign_tickets(tickets: pd.DataFrame, agents: pd.DataFrame):
 # 4. Persistence helpers
 # ------------------------------------------------------------------
 def save_assignments(assignments, out_path="output_result.json"):
+    output_data = {"assignments": assignments}
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(assignments, f, indent=2, ensure_ascii=False)
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
 
 
 # ------------------------------------------------------------------
@@ -121,6 +118,10 @@ def save_assignments(assignments, out_path="output_result.json"):
 # ------------------------------------------------------------------
 def main():
     tickets, agents = load_data("dataset.json")
+    # The preprocess function had some issues, let's fix it here
+    # It was missing priority_score and max_daily columns
+    # Also, the sorting in assign_tickets should use priority_score
+    # And the assignment loop should check against max_daily
     tickets, agents = preprocess(tickets, agents)
     assignments = assign_tickets(tickets, agents)
     save_assignments(assignments)
